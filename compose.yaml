@@ -1,0 +1,147 @@
+﻿services:
+  mysql:
+    image: mysql:8.0
+    container_name: blogapp_mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: "123456"
+      MYSQL_DATABASE: "blog_app"
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+  
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    # Thay đổi 'always' thành 'unless-stopped' nếu không muốn nó tự khởi động lại khi bạn tắt máy
+    restart: unless-stopped
+    ports:
+      # Cổng API/Console: Bạn truy cập qua localhost:9000
+      - "9000:9000"
+      # Cổng MinIO Console (Dashboard): Bạn truy cập qua localhost:9001
+      - "9001:9001"
+    environment:
+      # PHẢI THAY ĐỔI
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      # MINIO_SERVER_URL không cần thiết trong môi trường local dev/desktop
+    volumes:
+      # SỬ DỤNG ĐƯỜNG DẪN TƯƠNG ĐỐI (từ vị trí của tệp docker-compose.yaml)
+      - ./BlogApp/minio-data/data:/data
+      - ./BlogApp/minio-data/config:/root/.minio
+    command: server --console-address ":9001" /data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      
+  postgresql:
+    image: postgres:14
+    hostname: postgresql
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: "conduktor-console"
+      POSTGRES_USER: "conduktor"
+      POSTGRES_PASSWORD: "5zz2n8ce"
+      POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
+  conduktor-console:
+      image: conduktor/conduktor-console:1.38.0
+      ports:
+        - "8080:8080"
+      volumes:
+        - conduktor_data:/var/conduktor
+      environment:
+        CDK_DATABASE_URL: "postgresql://conduktor:5zz2n8ce@postgresql:5432/conduktor-console"
+        CDK_CLUSTERS_0_ID: "default"
+        CDK_CLUSTERS_0_NAME: "My Local Kafka Cluster"
+        CDK_CLUSTERS_0_COLOR: "#0013E7"
+        CDK_CLUSTERS_0_BOOTSTRAPSERVERS: "PLAINTEXT://broker:29092"
+        # CDK_CLUSTERS_0_SCHEMAREGISTRY_URL: "http://kafka-schema-registry:8081"
+        # CDK_CLUSTERS_0_KAFKACONNECTS_0_URL: "http://kafka-connect:8083"
+        # CDK_CLUSTERS_0_KAFKACONNECTS_0_NAME: "full stack kafka connect"
+        # CONSOLE_JAVA_OPTS: "-XX:UseSVE=0"
+      
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.7.0
+    hostname: zookeeper
+    container_name: zookeeper_blogapp
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    
+  broker:
+    image: confluentinc/cp-server:7.7.0
+    hostname: broker
+    container_name: broker
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_CONFLUENT_LICENSE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CONFLUENT_BALANCER_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: broker:29092
+      CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
+      CONFLUENT_METRICS_ENABLE: 'true'
+      CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'  
+  
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:7.7.0
+    hostname: control-center
+    container_name: control-center
+    depends_on:
+      - broker
+    ports:
+      - "9021:9021"
+    environment:
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: 'broker:29092'
+      CONTROL_CENTER_REPLICATION_FACTOR: 1
+      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
+      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
+      CONFLUENT_METRICS_TOPIC_REPLICATION: 1
+      PORT: 9021
+  
+  
+  
+  blogapp:
+    build:
+      context: ./BlogApp
+      dockerfile: Dockerfile
+    container_name: blogapp_api
+    depends_on:
+      - mysql
+    environment:
+      # Connection string tới MySQL container
+      ConnectionStrings__DefaultConnection: "Server=mysql;Port=3306;Database=blog_app;User=root;Password=123456;"
+      # JWT key
+      Jwt__Key: "adadhajhdhasjdhdasdsadasdasdasdasdasdasdasdasajshdhwuadasdasdasdasdadasdasdqhdoahshd"
+      # Kestrel listen cả HTTP + HTTPS
+      ASPNETCORE_URLS: "http://+:5230"
+      ASPNETCORE_ENVIRONMENT: Development
+      Kafka__BootstrapServers: "broker:29092"
+    ports:
+      - "5230:5230"
+      # - "7184:7184"
+    restart: always
+
+volumes:
+  mysql_data:
+  pg_data: { }
+  conduktor_data: { }
